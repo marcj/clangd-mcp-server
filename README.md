@@ -1,27 +1,25 @@
 # Clangd MCP Server
 
-An experimental [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that enables Claude Code to connect to clangd LSP for enhanced C++ code intelligence on large codebases.
-
-## Overview
-
-This MCP server bridges Claude Code with clangd (the Language Server Protocol implementation for C/C++), enabling rich code navigation capabilities without requiring full codebase indexing by Claude. It's designed to work efficiently with Chromium-scale codebases.
+[Model Context Protocol](https://modelcontextprotocol.io) server that bridges Claude Code with clangd for C++ code intelligence on large codebases.
 
 ## Features
 
-- **Code Navigation Tools**:
-  - `find_definition` - Jump to symbol definitions
-  - `find_references` - Find all references to a symbol
-  - `get_hover` - Get type information and documentation
-  - `workspace_symbol_search` - Search symbols across the workspace
-  - `find_implementations` - Find interface/virtual method implementations
-  - `get_document_symbols` - Get hierarchical symbol tree for a file
+**9 Code Intelligence Tools:**
+- `find_definition` - Jump to symbol definitions
+- `find_references` - Find all references to a symbol
+- `get_hover` - Get type information and documentation
+- `workspace_symbol_search` - Search symbols across workspace
+- `find_implementations` - Find interface/virtual method implementations
+- `get_document_symbols` - Get hierarchical symbol tree for a file
+- `get_diagnostics` - Get compiler errors, warnings, and notes
+- `get_call_hierarchy` - Get function callers and callees
+- `get_type_hierarchy` - Get base classes and derived classes
 
-- **Robust Architecture**:
-  - Long-lived clangd process with automatic crash recovery
-  - Lazy initialization (clangd starts on first query)
-  - Configurable for different project sizes (Chromium vs normal projects)
-  - Proper LSP lifecycle management (didOpen/didClose)
-  - Timeout and retry handling with exponential backoff
+**Architecture:**
+- Long-lived clangd with crash recovery and lazy initialization
+- Proper LSP lifecycle management (didOpen/didClose)
+- Timeout/retry with exponential backoff
+- Chromium-scale ready
 
 ## Requirements
 
@@ -46,63 +44,39 @@ brew install llvm
 Download from https://github.com/clangd/clangd/releases
 
 **Large projects with bundled clangd:**
-Some large projects bundle their own clangd for version consistency:
-- **Chromium**: Automatically detected at `third_party/llvm-build/Release+Asserts/bin/clangd`
-- **Other projects**: Use `CLANGD_PATH` environment variable to specify the bundled clangd location
-
-The MCP server automatically uses the bundled version when detected, ensuring version compatibility.
+- **Chromium**: Auto-detected at `third_party/llvm-build/Release+Asserts/bin/clangd`
+- **Other projects**: Set `CLANGD_PATH` to specify bundled clangd
 
 ## Installation
 
-### Option 1: Install from npm (when published)
-
 ```bash
+# From npm (when published)
 npm install -g clangd-mcp-server
-```
 
-### Option 2: Install from source
-
-```bash
+# From source
 git clone https://github.com/yourusername/language-server-mcp.git
 cd language-server-mcp
-npm install
-npm run build
-npm link
+npm install && npm run build && npm link
 ```
 
 ## Configuration
 
 ### Generating compile_commands.json
 
-Clangd requires a `compile_commands.json` file to understand your project's build configuration.
-
-**CMake projects:**
-```bash
-cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON /path/to/source
-```
-
-**Chromium/GN projects:**
-```bash
-gn gen out/Default
-# compile_commands.json will be in out/Default/
-```
-
-**Other build systems:**
-- See [Bear](https://github.com/rizsotto/Bear) for capturing compile commands
+**CMake:** `cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON /path/to/source`
+**GN (Chromium):** `gn gen out/Default`
+**Other:** Use [Bear](https://github.com/rizsotto/Bear)
 
 ### Claude Code Configuration
 
-Add the MCP server to your Claude Code configuration file (`~/.claude.json` or project-specific `.claude.json`):
+Add to `~/.claude.json` or `.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "clangd": {
       "command": "clangd-mcp-server",
-      "env": {
-        "PROJECT_ROOT": "/path/to/your/project",
-        "LOG_LEVEL": "info"
-      }
+      "env": {"PROJECT_ROOT": "/path/to/your/project"}
     }
   }
 }
@@ -110,104 +84,80 @@ Add the MCP server to your Claude Code configuration file (`~/.claude.json` or p
 
 ### Environment Variables
 
-Configure the server behavior using environment variables:
-
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROJECT_ROOT` | Project workspace root directory | Current working directory |
-| `COMPILE_COMMANDS_DIR` | Explicit path to directory containing compile_commands.json | Auto-detected |
-| `CLANGD_PATH` | Path to clangd binary (overrides all auto-detection) | Auto-detected (see below) |
-| `CLANGD_ARGS` | Additional clangd arguments | Auto-configured based on project |
-| `CLANGD_LOG_LEVEL` | Clangd's internal log level | `error` |
-| `LOG_LEVEL` | MCP server log level (ERROR, WARN, INFO, DEBUG) | `INFO` |
+| `PROJECT_ROOT` | Project workspace root | Current directory |
+| `COMPILE_COMMANDS_DIR` | Path to compile_commands.json directory | Auto-detected |
+| `CLANGD_PATH` | Path to clangd binary | Auto-detected |
+| `CLANGD_ARGS` | Additional clangd arguments | Auto-configured |
+| `LOG_LEVEL` | MCP log level (ERROR/WARN/INFO/DEBUG) | `INFO` |
+| `CLANGD_LOG_LEVEL` | Clangd log level | `error` |
 
-**Clangd Binary Auto-Detection (in order of precedence):**
-1. `CLANGD_PATH` environment variable (manual override for any clangd binary)
-2. Auto-detected project bundled clangd:
-   - **Chromium**: Automatically detects bundled clangd at:
-     - `third_party/llvm-build/Release+Asserts/bin/clangd`
-     - `third_party/llvm-build/Release/bin/clangd`
-3. System `clangd` from PATH
+**Clangd auto-detection order:** `CLANGD_PATH` → project bundled (Chromium: `third_party/llvm-build/.../clangd`) → system PATH
 
-The server logs which clangd binary and version is being used on startup.
-
-### Advanced Examples
+**Examples:**
 
 ```json
-// Chromium project (auto-detects bundled clangd)
-{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
-  "PROJECT_ROOT": "/home/user/chromium/src",
-  "COMPILE_COMMANDS_DIR": "/home/user/chromium/src/out/Default"
-}}}}
+// Chromium (auto-detects bundled clangd)
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server",
+  "env": {"PROJECT_ROOT": "/home/user/chromium/src"}}}}
 
-// Project with custom/bundled clangd
-{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
-  "PROJECT_ROOT": "/home/user/myproject",
-  "CLANGD_PATH": "/home/user/myproject/tools/clangd/bin/clangd"
-}}}}
+// Custom clangd binary
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server",
+  "env": {"CLANGD_PATH": "/custom/path/clangd"}}}}
 
-// System clangd with custom args
-{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
-  "CLANGD_PATH": "/opt/homebrew/opt/llvm/bin/clangd",
-  "CLANGD_ARGS": "--header-insertion=never --completion-style=detailed"
-}}}}
+// Custom args (e.g., enable background indexing)
+{"mcpServers": {"clangd": {"command": "clangd-mcp-server",
+  "env": {"CLANGD_ARGS": "--background-index --limit-results=1000"}}}}
 ```
 
 ## Usage
 
-Once configured, Claude Code can use these tools via natural language:
+Claude Code uses these tools via natural language:
 
-| Tool | Purpose | Example Query |
-|------|---------|---------------|
-| `find_definition` | Jump to symbol definition | "Find the definition of the symbol at line 42, column 10 in src/foo.cpp" |
-| `find_references` | Find all references to symbol | "Find all references to the function in include/bar.h at line 100" |
-| `get_hover` | Get type info and docs | "What is the type of the variable at line 200 in src/baz.cpp?" |
-| `workspace_symbol_search` | Search symbols project-wide | "Find all symbols matching 'HttpRequest'" |
-| `find_implementations` | Find interface/virtual implementations | "Find implementations of the method at line 50 in interface.h" |
-| `get_document_symbols` | Get file's symbol hierarchy | "Show me all symbols in src/main.cpp" |
+| Tool | Example Query |
+|------|---------------|
+| `find_definition` | "Find the definition at src/foo.cpp:42:10" |
+| `find_references` | "Find all references to the function at bar.h:100" |
+| `get_hover` | "What's the type at baz.cpp:200:15?" |
+| `workspace_symbol_search` | "Find symbols matching 'HttpRequest'" |
+| `find_implementations` | "Find implementations of interface.h:50" |
+| `get_document_symbols` | "Show all symbols in main.cpp" |
+| `get_diagnostics` | "Show errors in src/foo.cpp" |
+| `get_call_hierarchy` | "Show callers/callees at main.cpp:100:5" |
+| `get_type_hierarchy` | "Show base/derived classes at foo.h:42" |
 
-**Note:** LSP uses 0-indexed line/column numbers. Claude handles the conversion automatically.
+**Note:** LSP uses 0-indexed line/column. Claude handles conversion automatically.
 
 ## Performance
 
-### Background Indexing (Disabled by Default)
-
-Background indexing is **disabled** (`--background-index=false`) because MCP makes sporadic queries, not continuous edits. On-demand indexing saves GBs of memory while still indexing files as queried.
+**Background indexing disabled by default** for lower memory (<500MB) and faster startup. Files indexed on-demand.
 
 **Tradeoffs:**
-- ✅ Lower memory/CPU, faster startup
-- ⚠️ `workspace_symbol_search` limited to already-opened files
-- ⚠️ First query per file: 5-15s (subsequent: 1-5s)
+- ✅ Low memory/CPU, fast startup (<5s)
+- ⚠️ `workspace_symbol_search` limited to opened files
+- ⚠️ First query/file: 5-15s; subsequent: 1-5s
 
-**Enable for workspace-wide search** (costs: hours to index, high memory):
+**Enable for workspace-wide search** (costs GBs RAM, hours indexing):
 ```json
-{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
-  "CLANGD_ARGS": "--background-index --limit-references=1000 --limit-results=1000"
-}}}}
+{"env": {"CLANGD_ARGS": "--background-index --limit-results=1000"}}
 ```
 
-**Chromium-scale projects:** Use [remote index server](https://clangd.llvm.org/design/remote-index) instead.
-
-**Typical performance:**
-- Warm files: 1-5s | Cold files: 5-15s | Startup: <5s | Memory: <500MB
+**Chromium-scale:** Use [remote index](https://clangd.llvm.org/design/remote-index) instead.
 
 ## Troubleshooting
 
-| Problem | Cause/Error | Solution |
-|---------|-------------|----------|
-| **Clangd not found** | `spawn clangd ENOENT` | Install clangd or set `CLANGD_PATH` env var |
-| **Missing compile_commands.json** | `compile_commands.json not found` | Generate it (see Configuration) with CMake/GN/Bear |
-| **Wrong clangd version** | Warning about old clangd | The server auto-detects bundled clangd (e.g., Chromium). Check startup logs. Use `CLANGD_PATH` to override |
-| **Timeout** | `timed out after 30000ms` | File not in build, or clangd indexing (wait/retry), or check with `CLANGD_LOG_LEVEL=verbose` |
-| **Crashes** | `Max restart attempts reached` | Check clangd version (see startup logs), stderr logs, try different `CLANGD_ARGS`, validate compile_commands.json |
+| Problem | Solution |
+|---------|----------|
+| `spawn clangd ENOENT` | Install clangd or set `CLANGD_PATH` |
+| `compile_commands.json not found` | Generate with CMake/GN/Bear (see Configuration) |
+| `timed out after 30000ms` | File not in build, or clangd indexing; wait/retry or check logs |
+| `Max restart attempts reached` | Check clangd version/stderr, validate compile_commands.json |
 
 **Enable verbose logging:**
 ```json
-{"mcpServers": {"clangd": {"command": "clangd-mcp-server", "env": {
-  "LOG_LEVEL": "DEBUG", "CLANGD_LOG_LEVEL": "verbose"
-}}}}
+{"env": {"LOG_LEVEL": "DEBUG", "CLANGD_LOG_LEVEL": "verbose"}}
 ```
-Check stderr in Claude Code logs.
 
 ## Architecture
 
@@ -226,38 +176,23 @@ clangd-mcp-server
 ## Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Watch mode
-npm run watch
-
-# Test locally
-node dist/index.js
+npm install        # Install
+npm run build      # Build
+npm run watch      # Watch mode
+npm test           # Run tests
+node dist/index.js # Test locally
 ```
-
-## License
-
-This project is licensed under the Mozilla Public License Version 2.0 (MPL-2.0).
-See [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions welcome! This is an experimental project. Please open issues for bugs or feature requests.
 
 ## Known Limitations
 
-- Does not connect to IDE-managed clangd instances
-- No file watching (changes require manual didChange, not implemented)
-- No custom compilation database generation
-- Does not bundle clangd binary
-- Single clangd instance per MCP server (one per project root)
+- No file watching (changes need manual refresh)
+- Single clangd instance per project root
+- Doesn't bundle clangd binary
+
+## License
+
+MPL-2.0 - See [LICENSE](LICENSE)
 
 ## References
 
-- [Model Context Protocol](https://modelcontextprotocol.io)
-- [clangd](https://clangd.llvm.org)
-- [Language Server Protocol](https://microsoft.github.io/language-server-protocol/)
+[Model Context Protocol](https://modelcontextprotocol.io) • [clangd](https://clangd.llvm.org) • [LSP](https://microsoft.github.io/language-server-protocol/)

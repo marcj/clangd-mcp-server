@@ -3,83 +3,54 @@
 ## Running Tests
 
 ```bash
-npm test                # All tests
-npm run test:unit       # Unit tests
-npm run test:coverage   # With coverage
-npm run test:watch      # Watch mode
-```
-
-## Structure
-
-```
-tests/
-├── unit/                         ✅ 6 files completed
-│   ├── utils/                    ✅ uri, errors, logger
-│   ├── config-detector.test.ts   ✅
-│   ├── lsp-client.test.ts        ✅
-│   ├── file-tracker.test.ts      ✅
-│   ├── clangd-manager.test.ts    ⏳ TODO
-│   └── tools/*.test.ts           ⏳ TODO (6 tools)
-├── integration/                  ⏳ TODO
-├── e2e/                          ⏳ TODO
-└── helpers/                      ✅ Mock utilities
+npm test           # All tests
+npm run test:unit  # Unit tests only
+npm run test:watch # Watch mode
 ```
 
 ## Coverage
 
-**Current**: ~60% (95+ tests across core modules)
+**Core modules tested** (~60% coverage, 95+ tests):
 - ✅ Utils (uri, errors, logger)
-- ✅ Config detector
-- ✅ LSP client (JSON-RPC, Content-Length framing, concurrent requests)
-- ✅ File tracker (didOpen/didClose, language ID detection)
+- ✅ Config detector (bundled clangd, compile_commands.json)
+- ✅ LSP client (JSON-RPC, message framing, concurrent requests)
+- ✅ File tracker (didOpen/didClose, language detection)
 
-**TODO**:
-- Clangd manager (spawning, crash recovery, graceful shutdown)
-- Tool implementations (6 tools: definition, references, hover, workspace symbols, implementations, document symbols)
-- Integration tests (full LSP flows, component integration)
-- E2E tests (real clangd with sample C++ project)
+**Not yet tested:**
+- Clangd manager (spawning, crash recovery)
+- Tools (9 tools: definition, references, hover, workspace symbols, implementations, document symbols, diagnostics, call hierarchy, type hierarchy)
+- Integration/E2E tests
 
 ## Test Helpers
 
-**`tests/helpers/mock-streams.ts`**: Mock stdio streams, LSP message formatting/parsing
-**`tests/helpers/mock-lsp-responses.ts`**: Pre-built LSP responses for all methods
-**`tests/helpers/mock-process.ts`**: Mock child process for testing clangd manager
+- `tests/helpers/mock-streams.ts` - Mock stdio, LSP messages
+- `tests/helpers/mock-lsp-responses.ts` - Pre-built LSP responses
+- `tests/helpers/mock-process.ts` - Mock child process
 
 ## Writing Tests
 
-**Example - Testing a new LSP tool:**
+Example:
 ```typescript
-// tests/unit/tools/my-tool.test.ts
-import { describe, it, expect, beforeEach } from '@jest/globals';
-import { MyTool } from '../../../src/tools/my-tool.js';
-import { createMockLSPClient } from '../../helpers/mock-lsp-responses.js';
+import { describe, it, expect } from '@jest/globals';
+import { myFunction } from '../../../src/my-module.js';
 
-describe('MyTool', () => {
-  it('should handle successful LSP response', async () => {
-    // Arrange
-    const mockClient = createMockLSPClient();
-    const tool = new MyTool(mockClient);
-
-    // Act
-    const result = await tool.execute({file: 'test.cpp', line: 10});
-
-    // Assert
-    expect(result).toMatchObject({location: expect.any(String)});
+describe('MyModule', () => {
+  it('should handle success case', async () => {
+    const result = await myFunction('input');
+    expect(result).toMatchObject({status: 'ok'});
   });
 });
 ```
 
 **Guidelines:**
-- Use descriptive test names: "should handle partial message buffers"
-- Follow AAA pattern: Arrange, Act, Assert
-- Test edge cases and error paths
-- Mock external dependencies (file system, child processes)
-- Clean up after tests (temp files, env vars)
-- Use test helpers from `tests/helpers/`
-- Avoid flaky tests (proper async patterns, no fixed timeouts)
+- Follow AAA: Arrange, Act, Assert
+- Test edge cases and errors
+- Mock external dependencies (filesystem, processes)
+- Use helpers from `tests/helpers/`
+- Clean up resources (files, env vars)
 
 ## Troubleshooting
 
-**"Cannot find module"**: Run `npm run build` first, check .js extensions in imports
-**Timeouts**: Increase timeout in jest.config.js or per-test: `it('test', async () => {...}, 10000)`
-**Flaky tests**: Avoid fixed timeouts, clean up resources properly
+- **Cannot find module**: Run `npm run build`, check `.js` extensions in imports
+- **Timeouts**: Increase in `jest.config.js` or per-test with timeout arg
+- **Flaky tests**: Avoid fixed timeouts, clean up properly
