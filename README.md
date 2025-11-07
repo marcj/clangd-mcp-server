@@ -54,8 +54,8 @@ Download from https://github.com/clangd/clangd/releases
 npm install -g clangd-mcp-server
 
 # From source
-git clone https://github.com/yourusername/language-server-mcp.git
-cd language-server-mcp
+git clone https://github.com/felipeerias/clangd-mcp-server.git
+cd clangd-mcp-server
 npm install && npm run build && npm link
 ```
 
