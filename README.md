@@ -2,6 +2,16 @@
 
 [Model Context Protocol](https://modelcontextprotocol.io) server for clangd on large C++ codebases.
 
+> **Fork Note:** This is a fork of [BenjiHansell/clangd-mcp-server](https://github.com/BenjiHansell/clangd-mcp-server) with automatic indexing and project-focused symbol filtering.
+
+## Fork Enhancements
+
+- **Automatic Indexing**: Opens all source files from `compile_commands.json` on startup to trigger clangd's indexer
+- **Project-Only Symbol Search**: `workspace_symbol_search` returns only project symbols by default (excludes system headers)
+- **File Watcher**: Watches `compile_commands.json` for changes - automatically re-indexes when you run `cmake`
+- **Background Indexing**: Enabled by default (`--background-index`) for persistent symbol search
+- **Exclude Paths**: Filter out directories like `third_party/`, `libs/`, `vendor/` from results
+
 This MCP provides coding agents like Claude Code with a collection of tools that they may use to answer natural language queries from the user:
 
 - `find_definition`: Jump to symbol definitions
@@ -10,8 +20,9 @@ This MCP provides coding agents like Claude Code with a collection of tools that
   - _"Find all references to the function at bar.h:100"_
 - `get_hover`: Get type information and documentation
   - _"What's the type at baz.cpp:200:15?"_
-- `workspace_symbol_search`: Search symbols across workspace
+- `workspace_symbol_search`: Search symbols across workspace (project-only by default)
   - _"Find symbols matching 'HttpRequest'"_
+  - Options: `include_external` (include system headers), `exclude_paths` (filter directories)
 - `find_implementations`: Find interface/virtual method implementations
   - _"Find implementations of interface.h:50"_
 - `get_document_symbols`: Get hierarchical symbol tree for a file
@@ -113,10 +124,18 @@ Some large projects bundle their own clangd.
 
 For other projects in a similar situation, set `CLANGD_PATH` to specify the bundled clangd.
 
-For bettern performance, background indexing is disabled by default. Usually there is already an axisting `clangd` server taking care of indexing the codebase. You can enable it with:
+Background indexing is enabled by default in this fork for better `workspace_symbol_search` results.
+
+**How indexing works:**
+1. On first tool call, the server reads `compile_commands.json` to find all source files
+2. All source files are opened in clangd via `textDocument/didOpen`, triggering indexing
+3. The server watches `compile_commands.json` for changes (e.g., after running `cmake`)
+4. When changes are detected, new/modified files are automatically re-opened
+
+To disable background indexing:
 
 ```json
-{"env": {"CLANGD_ARGS": "--background-index --limit-results=1000"}}
+{"env": {"CLANGD_ARGS": "--background-index=false"}}
 ```
 
 Large projects might consider using [remote index](https://clangd.llvm.org/design/remote-index).

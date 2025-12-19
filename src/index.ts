@@ -11,27 +11,108 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
+import { watch, FSWatcher } from 'node:fs';
 import { logger } from './utils/logger.js';
-import { detectConfiguration } from './config-detector.js';
+import { detectConfiguration, ClangdConfig } from './config-detector.js';
 import { ClangdManager } from './clangd-manager.js';
 import { FileTracker } from './file-tracker.js';
 
 import { findDefinition } from './tools/find-definition.js';
 import { findReferences } from './tools/find-references.js';
 import { getHover } from './tools/get-hover.js';
-import { workspaceSymbolSearch } from './tools/workspace-symbol.js';
+import { workspaceSymbolSearch, WorkspaceSymbolOptions } from './tools/workspace-symbol.js';
 import { findImplementations } from './tools/find-implementations.js';
 import { getDocumentSymbols } from './tools/document-symbols.js';
 import { getDiagnostics, DiagnosticsCache } from './tools/get-diagnostics.js';
 import { getCallHierarchy } from './tools/get-call-hierarchy.js';
 import { getTypeHierarchy } from './tools/get-type-hierarchy.js';
+import { detectCMakeSources } from './cmake-detector.js';
 
 // Global state
 let clangdManager: ClangdManager | null = null;
 let fileTracker: FileTracker | null = null;
 let diagnosticsCache: DiagnosticsCache | null = null;
+let projectRoot: string = '';
+let compileCommandsPath: string | undefined;
+let compileCommandsWatcher: FSWatcher | null = null;
 let initializationPromise: Promise<void> | null = null;
 let isShuttingDown: boolean = false;
+
+/**
+ * Open all source files from compile_commands.json to trigger clangd indexing
+ */
+async function openSourceFiles(root: string, tracker: FileTracker): Promise<void> {
+  const sources = await detectCMakeSources(root);
+
+  if (sources.length === 0) {
+    logger.info('No source files found in compile_commands.json');
+    return;
+  }
+
+  logger.info(`Opening ${sources.length} source files for indexing...`);
+
+  // Open files in batches
+  const batchSize = 10;
+  let opened = 0;
+
+  for (let i = 0; i < sources.length; i += batchSize) {
+    const batch = sources.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (file) => {
+        try {
+          await tracker.ensureFileOpen(file);
+          opened++;
+        } catch (error) {
+          logger.debug('Failed to open:', file);
+        }
+      })
+    );
+  }
+
+  logger.info(`Opened ${opened}/${sources.length} source files`);
+}
+
+/**
+ * Watch compile_commands.json for changes and re-index when it changes
+ */
+function startCompileCommandsWatcher(path: string, root: string, tracker: FileTracker): void {
+  if (compileCommandsWatcher) {
+    return; // Already watching
+  }
+
+  logger.info('Watching compile_commands.json for changes');
+
+  let debounceTimer: NodeJS.Timeout | null = null;
+
+  compileCommandsWatcher = watch(path, (eventType) => {
+    if (isShuttingDown) return;
+
+    // Debounce to avoid multiple reloads during cmake regeneration
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+
+    debounceTimer = setTimeout(async () => {
+      logger.info('compile_commands.json changed, re-indexing...');
+      try {
+        await openSourceFiles(root, tracker);
+      } catch (error) {
+        logger.error('Failed to re-index after compile_commands.json change:', error);
+      }
+    }, 1000); // Wait 1s for cmake to finish writing
+  });
+}
+
+/**
+ * Stop watching compile_commands.json
+ */
+function stopCompileCommandsWatcher(): void {
+  if (compileCommandsWatcher) {
+    compileCommandsWatcher.close();
+    compileCommandsWatcher = null;
+    logger.info('Stopped watching compile_commands.json');
+  }
+}
 
 /**
  * Validate MCP tool arguments
@@ -66,6 +147,12 @@ function validateToolArgs(name: string, args: any): void {
       }
       if (args.limit !== undefined && (typeof args.limit !== 'number' || !Number.isInteger(args.limit) || args.limit <= 0)) {
         throw new Error('Invalid limit: must be a positive integer');
+      }
+      if (args.include_external !== undefined && typeof args.include_external !== 'boolean') {
+        throw new Error('Invalid include_external: must be a boolean');
+      }
+      if (args.exclude_paths !== undefined && !Array.isArray(args.exclude_paths)) {
+        throw new Error('Invalid exclude_paths: must be an array of strings');
       }
       break;
 
@@ -129,6 +216,8 @@ async function ensureClangdInitialized(): Promise<void> {
       logger.info('Initializing clangd...');
 
       const config = detectConfiguration();
+      projectRoot = config.projectRoot;
+      compileCommandsPath = config.compileCommandsPath;
       clangdManager = new ClangdManager(config);
       await clangdManager.start();
 
@@ -145,6 +234,14 @@ async function ensureClangdInitialized(): Promise<void> {
       });
 
       logger.info('Clangd initialization complete');
+
+      // Open all source files to trigger indexing
+      await openSourceFiles(projectRoot, fileTracker);
+
+      // Watch compile_commands.json for changes
+      if (compileCommandsPath) {
+        startCompileCommandsWatcher(compileCommandsPath, projectRoot, fileTracker);
+      }
     } finally {
       // Release lock after completion (success or failure)
       initializationPromise = null;
@@ -249,7 +346,7 @@ async function main() {
         },
         {
           name: 'workspace_symbol_search',
-          description: 'Search for symbols across the entire workspace',
+          description: 'Search for symbols across the workspace. By default, only returns symbols from the project directory (not system headers).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -261,6 +358,16 @@ async function main() {
                 type: 'number',
                 description: 'Maximum number of results to return (default: 100)',
                 default: 100
+              },
+              include_external: {
+                type: 'boolean',
+                description: 'Include symbols from outside the project (system headers, etc). Default: false',
+                default: false
+              },
+              exclude_paths: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Paths to exclude from results (e.g., ["libs/", "third_party/"]). Supports relative paths from project root.'
               }
             },
             required: ['query']
@@ -430,10 +537,16 @@ async function main() {
         }
 
         case 'workspace_symbol_search': {
+          const options: WorkspaceSymbolOptions = {
+            query: args.query as string,
+            limit: (args.limit as number) || 100,
+            includeExternal: args.include_external as boolean | undefined,
+            excludePaths: args.exclude_paths as string[] | undefined
+          };
           const result = await workspaceSymbolSearch(
             clangdManager.getClient(),
-            args.query as string,
-            (args.limit as number) || 100
+            projectRoot,
+            options
           );
           return {
             content: [{ type: 'text', text: result }]
@@ -534,6 +647,9 @@ async function main() {
 
     isShuttingDown = true;
     logger.info(`Received ${signal}, shutting down...`);
+
+    // Stop watching compile_commands.json
+    stopCompileCommandsWatcher();
 
     try {
       if (fileTracker) {

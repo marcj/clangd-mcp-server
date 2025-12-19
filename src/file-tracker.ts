@@ -3,9 +3,18 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { logger } from './utils/logger.js';
 import { normalizeToUri, uriToPath } from './utils/uri.js';
 import { LSPClient } from './lsp-client.js';
+
+interface CompileCommand {
+  file: string;
+  directory: string;
+  command?: string;
+  arguments?: string[];
+}
 
 /**
  * Tracks which files have been opened in the LSP server
@@ -191,6 +200,63 @@ export class FileTracker {
   isFileOpen(filePath: string): boolean {
     const uri = normalizeToUri(filePath);
     return this.openFiles.has(uri);
+  }
+
+  /**
+   * Warm the index by opening source files from compile_commands.json
+   * This triggers clangd's background indexer to start building the index
+   * Runs asynchronously in the background - does not block
+   */
+  async warmIndex(compileCommandsPath: string): Promise<void> {
+    if (!compileCommandsPath || !existsSync(compileCommandsPath)) {
+      logger.warn('Cannot warm index: compile_commands.json not found');
+      return;
+    }
+
+    logger.info('Warming index from:', compileCommandsPath);
+
+    try {
+      const content = await readFile(compileCommandsPath, 'utf-8');
+      const commands: CompileCommand[] = JSON.parse(content);
+
+      // Get unique source files (not headers - clangd indexes headers via includes)
+      const sourceFiles = [...new Set(
+        commands
+          .map(cmd => cmd.file)
+          .filter(file => /\.(c|cc|cpp|cxx|c\+\+|m|mm)$/i.test(file))
+      )];
+
+      logger.info(`Found ${sourceFiles.length} source files to warm index`);
+
+      // Open files in batches to avoid overwhelming clangd
+      const batchSize = 5;
+      const maxFilesToOpen = 20; // Don't open too many, just enough to trigger indexing
+      const filesToOpen = sourceFiles.slice(0, maxFilesToOpen);
+
+      for (let i = 0; i < filesToOpen.length; i += batchSize) {
+        const batch = filesToOpen.slice(i, i + batchSize);
+
+        // Open batch in parallel
+        await Promise.all(
+          batch.map(async (file) => {
+            try {
+              await this.ensureFileOpen(file);
+            } catch (error) {
+              logger.debug(`Failed to open ${file} for warming:`, error);
+            }
+          })
+        );
+
+        // Small delay between batches to let clangd process
+        if (i + batchSize < filesToOpen.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      logger.info(`Index warming complete: opened ${filesToOpen.length} files`);
+    } catch (error) {
+      logger.error('Failed to warm index:', error);
+    }
   }
 }
 

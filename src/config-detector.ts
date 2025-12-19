@@ -137,7 +137,7 @@ export function detectConfiguration(): ClangdConfig {
   }
 
   // Generate clangd arguments
-  const clangdArgs = generateClangdArgs(isChromiumProject, compileCommandsPath);
+  const clangdArgs = generateClangdArgs(projectRoot, isChromiumProject, compileCommandsPath);
   logger.info('Clangd arguments:', clangdArgs.join(' '));
 
   return {
@@ -236,7 +236,7 @@ function parseShellArgs(input: string): string[] {
 /**
  * Generate appropriate clangd arguments based on project type
  */
-function generateClangdArgs(isChromiumProject: boolean, compileCommandsPath?: string): string[] {
+function generateClangdArgs(projectRoot: string, isChromiumProject: boolean, compileCommandsPath?: string): string[] {
   const args: string[] = [];
 
   // Parse additional args from environment
@@ -250,11 +250,10 @@ function generateClangdArgs(isChromiumProject: boolean, compileCommandsPath?: st
     args.push(`--compile-commands-dir=${dirname(compileCommandsPath)}`);
   }
 
-  // Disable background indexing by default for MCP server use case
-  // MCP servers make sporadic queries, not continuous editing, so on-demand
-  // indexing (via didOpen) is more efficient. Users can override via CLANGD_ARGS.
+  // Enable background indexing for workspace symbol search to work
+  // --background-index persists the index to .cache/clangd/index/ automatically
   if (!args.some(arg => arg.startsWith('--background-index'))) {
-    args.push('--background-index=false');
+    args.push('--background-index=true');
   }
 
   // For Chromium projects, suggest remote index server

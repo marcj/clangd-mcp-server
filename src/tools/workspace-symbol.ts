@@ -20,11 +20,22 @@ interface SymbolInformation {
   containerName?: string;
 }
 
+export interface WorkspaceSymbolOptions {
+  query: string;
+  limit?: number;
+  /** Include symbols from outside the project root (default: false) */
+  includeExternal?: boolean;
+  /** Paths to exclude from results (e.g., ["libs/", "third_party/"]) */
+  excludePaths?: string[];
+}
+
 export async function workspaceSymbolSearch(
   lspClient: LSPClient,
-  query: string,
-  limit: number = 100
+  projectRoot: string,
+  options: WorkspaceSymbolOptions
 ): Promise<string> {
+  const { query, limit = 100, includeExternal = false, excludePaths = [] } = options;
+
   // Make LSP request with retry
   const symbols: SymbolInformation[] = await withRetry(async () => {
     const result = await lspClient.request('workspace/symbol', {
@@ -34,16 +45,48 @@ export async function workspaceSymbolSearch(
     return result || [];
   });
 
+  // Apply filtering
+  let filteredSymbols = symbols;
+
+  // Filter to project root unless includeExternal is true
+  if (!includeExternal && projectRoot) {
+    filteredSymbols = filteredSymbols.filter(sym => {
+      const filePath = uriToPath(sym.location.uri);
+      return filePath.startsWith(projectRoot);
+    });
+  }
+
+  // Apply exclude paths
+  if (excludePaths.length > 0) {
+    filteredSymbols = filteredSymbols.filter(sym => {
+      const filePath = uriToPath(sym.location.uri);
+      // Check if any exclude path matches
+      return !excludePaths.some(excludePath => {
+        // Support both absolute and relative paths
+        if (excludePath.startsWith('/')) {
+          return filePath.startsWith(excludePath);
+        } else {
+          // Relative path - check if it's a component of the path under project root
+          const relativePath = filePath.slice(projectRoot.length + 1);
+          return relativePath.startsWith(excludePath) ||
+                 relativePath.includes('/' + excludePath);
+        }
+      });
+    });
+  }
+
   // Format results
-  if (symbols.length === 0) {
+  if (filteredSymbols.length === 0) {
+    const filterInfo = !includeExternal ? ` in project '${projectRoot}'` : '';
+    const excludeInfo = excludePaths.length > 0 ? ` (excluding: ${excludePaths.join(', ')})` : '';
     return JSON.stringify({
       found: false,
-      message: `No symbols found matching '${query}'`
+      message: `No symbols found matching '${query}'${filterInfo}${excludeInfo}`
     });
   }
 
   // Apply limit
-  const limitedSymbols = symbols.slice(0, limit);
+  const limitedSymbols = filteredSymbols.slice(0, limit);
 
   const formattedSymbols = limitedSymbols.map(sym => ({
     name: sym.name,
@@ -57,9 +100,12 @@ export async function workspaceSymbolSearch(
 
   return JSON.stringify({
     found: true,
-    count: symbols.length,
+    count: filteredSymbols.length,
     returned: formattedSymbols.length,
-    truncated: symbols.length > limit,
+    truncated: filteredSymbols.length > limit,
+    projectRoot,
+    includeExternal,
+    excludePaths: excludePaths.length > 0 ? excludePaths : undefined,
     symbols: formattedSymbols
   }, null, 2);
 }
